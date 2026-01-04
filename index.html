@@ -1,0 +1,1351 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>労働衛生コンサルタント 口述試験対策</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  
+  <script type="text/babel">
+    const { useState, useRef, useEffect } = React;
+
+    // ストレージキー
+    const STORAGE_KEYS = {
+      review: 'ohc-exam-review-items',
+      addedMainThemes: 'ohc-exam-added-main-themes',      // 本編に追加した問題
+      addedAdditionalQs: 'ohc-exam-added-additional-qs'   // 追加問題編に追加した問題
+    };
+
+    // マークダウンパーサー
+    const parseQuestionsMarkdown = (markdown) => {
+      const themes = [];
+      let currentTheme = null;
+      let currentQuestion = null;
+      let currentSection = null;
+      
+      const lines = markdown.split('\n');
+      
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        
+        const themeMatch = line.match(/^##\s*(?:テーマ\d+[：:]\s*)?(.+?)$/);
+        if (themeMatch && !line.includes('【予想問題') && !line.includes('第') && !line.includes('章')) {
+          if (currentTheme && currentTheme.questions.length > 0) {
+            themes.push(currentTheme);
+          }
+          currentTheme = { id: themes.length + 1, name: themeMatch[1].trim(), questions: [] };
+          currentQuestion = null;
+          continue;
+        }
+        
+        const questionMatch = line.match(/\*\*Q\d+[（(](基本|詳細|応用)問題[）)][：:]\*\*/);
+        if (questionMatch && currentTheme) {
+          if (currentQuestion) currentTheme.questions.push(currentQuestion);
+          currentQuestion = { level: questionMatch[1], question: '', modelAnswer: '', keyPoints: [], followUpQuestions: [] };
+          currentSection = 'question';
+          continue;
+        }
+        
+        if (line.includes('【模範解答】')) { currentSection = 'modelAnswer'; continue; }
+        if (line.includes('試験官が見ているポイント')) { currentSection = 'keyPoints'; continue; }
+        if (line.includes('想定される追加質問')) { currentSection = 'followUp'; continue; }
+        if (line.trim() === '---' || line.trim() === '') continue;
+        if (line.includes('【予想問題')) {
+          if (currentQuestion) { currentTheme.questions.push(currentQuestion); currentQuestion = null; }
+          continue;
+        }
+        
+        if (currentQuestion && currentSection) {
+          const cleanLine = line.trim();
+          if (!cleanLine) continue;
+          
+          if (currentSection === 'question' && !cleanLine.startsWith('**') && !cleanLine.startsWith('#')) {
+            currentQuestion.question += (currentQuestion.question ? ' ' : '') + cleanLine;
+          } else if (currentSection === 'modelAnswer' && !cleanLine.startsWith('**') && !cleanLine.startsWith('#')) {
+            currentQuestion.modelAnswer += (currentQuestion.modelAnswer ? '\n' : '') + cleanLine;
+          } else if (currentSection === 'keyPoints' && (cleanLine.startsWith('-') || cleanLine.startsWith('・'))) {
+            currentQuestion.keyPoints.push(cleanLine.replace(/^[-・]\s*/, ''));
+          } else if (currentSection === 'followUp' && (cleanLine.startsWith('-') || cleanLine.startsWith('・'))) {
+            currentQuestion.followUpQuestions.push(cleanLine.replace(/^[-・]\s*/, '').replace(/[「」]/g, ''));
+          }
+        }
+      }
+      
+      if (currentQuestion && currentTheme) currentTheme.questions.push(currentQuestion);
+      if (currentTheme && currentTheme.questions.length > 0) themes.push(currentTheme);
+      
+      return themes;
+    };
+
+    const parseFollowUpMarkdown = (markdown) => {
+      const followUps = {};
+      let currentQuestion = null;
+      let currentAnswer = '';
+      
+      const lines = markdown.split('\n');
+      
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        
+        const questionMatch = line.match(/^###\s*Q[：:]\s*(.+)$/);
+        if (questionMatch) {
+          if (currentQuestion && currentAnswer) followUps[currentQuestion] = currentAnswer.trim();
+          currentQuestion = questionMatch[1].trim();
+          currentAnswer = '';
+          continue;
+        }
+        
+        const answerMatch = line.match(/^\*\*A[：:]\*\*\s*(.*)$/);
+        if (answerMatch) { currentAnswer = answerMatch[1]; continue; }
+        if (line.trim() === '---' || line.startsWith('## ') || line.trim() === '') continue;
+        if (currentQuestion && !line.startsWith('#') && !line.startsWith('**')) {
+          currentAnswer += ' ' + line.trim();
+        }
+      }
+      
+      if (currentQuestion && currentAnswer) followUps[currentQuestion] = currentAnswer.trim();
+      return followUps;
+    };
+
+    function App() {
+      const [appMode, setAppMode] = useState('loading');
+      
+      // 本編（questions.mdから読み込み）
+      const [mainThemes, setMainThemes] = useState([]);
+      // 本編に追加した問題（ユーザーが手動追加）
+      const [addedMainThemes, setAddedMainThemes] = useState([]);
+      // 追加問題編（followup.mdから読み込み）
+      const [additionalFollowUps, setAdditionalFollowUps] = useState({});
+      // 追加問題編に追加した問題（ユーザーが手動追加）
+      const [addedAdditionalQs, setAddedAdditionalQs] = useState({});
+      
+      // 復習フォルダ
+      const [reviewItems, setReviewItems] = useState([]);
+      
+      // 試験で使用するデータ（選択されたモードに基づく）
+      const [activeThemes, setActiveThemes] = useState([]);
+      const [activeFollowUps, setActiveFollowUps] = useState({});
+      const [examMode, setExamMode] = useState(null); // 'main', 'additional', 'custom', 'review'
+      
+      // 試験状態
+      const [gameState, setGameState] = useState('start');
+      const [messages, setMessages] = useState([]);
+      const [inputValue, setInputValue] = useState('');
+      const [isLoading, setIsLoading] = useState(false);
+      const [currentThemeIndex, setCurrentThemeIndex] = useState(0);
+      const [currentQuestionLevel, setCurrentQuestionLevel] = useState(0);
+      const [completedThemes, setCompletedThemes] = useState([]);
+      const [scores, setScores] = useState([]);
+      const [totalScore, setTotalScore] = useState(0);
+      const [followUpQuestion, setFollowUpQuestion] = useState(null);
+      const [usedThemes, setUsedThemes] = useState([]);
+      const [takeHomeCount, setTakeHomeCount] = useState(0);
+      const [takeHomeThemes, setTakeHomeThemes] = useState([]);
+      const [currentReviewIndex, setCurrentReviewIndex] = useState(0);
+      const MAX_TAKE_HOME = 2;
+      
+      // 管理画面
+      const [adminTab, setAdminTab] = useState('addMain');
+      const [mainMarkdownInput, setMainMarkdownInput] = useState('');
+      const [additionalMarkdownInput, setAdditionalMarkdownInput] = useState('');
+      
+      const messagesEndRef = useRef(null);
+
+      // 初期化
+      useEffect(() => {
+        const loadData = async () => {
+          try {
+            // localStorageから読み込み
+            const savedReview = localStorage.getItem(STORAGE_KEYS.review);
+            const savedAddedMain = localStorage.getItem(STORAGE_KEYS.addedMainThemes);
+            const savedAddedAdditional = localStorage.getItem(STORAGE_KEYS.addedAdditionalQs);
+            
+            if (savedReview) setReviewItems(JSON.parse(savedReview));
+            if (savedAddedMain) setAddedMainThemes(JSON.parse(savedAddedMain));
+            if (savedAddedAdditional) setAddedAdditionalQs(JSON.parse(savedAddedAdditional));
+            
+            // マークダウンファイルを読み込み（本編）
+            const questionsRes = await fetch('./data/questions.md').catch(() => null);
+            if (questionsRes && questionsRes.ok) {
+              const text = await questionsRes.text();
+              const parsed = parseQuestionsMarkdown(text);
+              if (parsed.length > 0) setMainThemes(parsed);
+            }
+            
+            // マークダウンファイルを読み込み（追加問題編）
+            const followUpRes = await fetch('./data/followup.md').catch(() => null);
+            if (followUpRes && followUpRes.ok) {
+              const text = await followUpRes.text();
+              const parsed = parseFollowUpMarkdown(text);
+              if (Object.keys(parsed).length > 0) setAdditionalFollowUps(parsed);
+            }
+            
+            setAppMode('menu');
+          } catch (err) {
+            console.error('Load error:', err);
+            setAppMode('menu');
+          }
+        };
+        loadData();
+      }, []);
+
+      // データ保存
+      useEffect(() => {
+        if (appMode !== 'loading') {
+          localStorage.setItem(STORAGE_KEYS.review, JSON.stringify(reviewItems));
+          localStorage.setItem(STORAGE_KEYS.addedMainThemes, JSON.stringify(addedMainThemes));
+          localStorage.setItem(STORAGE_KEYS.addedAdditionalQs, JSON.stringify(addedAdditionalQs));
+        }
+      }, [reviewItems, addedMainThemes, addedAdditionalQs, appMode]);
+
+      const scrollToBottom = () => messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+      useEffect(() => { scrollToBottom(); }, [messages]);
+
+      const addMessage = (role, content) => setMessages(prev => [...prev, { role, content }]);
+
+      // 内部採点ロジック（試験官の評価基準に基づく）
+      const gradeAnswer = async (question, modelAnswer, keyPoints, userAnswer) => {
+        // 回答が空の場合
+        if (!userAnswer || userAnswer.trim().length === 0) {
+          return { score: 0, feedback: '回答が入力されていません。' };
+        }
+        
+        const answer = userAnswer.trim();
+        const model = (modelAnswer || '');
+        const answerLower = answer.toLowerCase();
+        
+        // === 採点要素の初期化 ===
+        let score = 5; // 基本点5点スタート
+        let feedbackParts = [];
+        
+        // === 1. 回答の長さによる評価 ===
+        const charCount = answer.length;
+        if (charCount < 10) {
+          score -= 2;
+          feedbackParts.push('回答が短すぎます');
+        } else if (charCount < 30) {
+          score -= 1;
+          feedbackParts.push('もう少し詳しく説明しましょう');
+        } else if (charCount >= 100) {
+          score += 1; // 十分な長さでボーナス
+        }
+        
+        // === 2. キーポイントとの一致度（重要！） ===
+        // 模範解答とキーポイントからキーワードを抽出
+        const extractKeywords = (text) => {
+          if (!text) return [];
+          // 重要な単語を抽出（2文字以上）
+          const words = text.match(/[ァ-ヶー]{2,}|[一-龯]{2,}|[a-zA-Z]{3,}|[0-9]+[a-zA-Z%℃度]/g) || [];
+          return [...new Set(words)];
+        };
+        
+        const modelKeywords = extractKeywords(model);
+        const keyPointsText = (keyPoints || []).join(' ');
+        const keyPointKeywords = extractKeywords(keyPointsText);
+        
+        // 重要キーワード（キーポイントから抽出したもの）を優先
+        const primaryKeywords = keyPointKeywords.length > 0 ? keyPointKeywords : modelKeywords.slice(0, 15);
+        
+        // キーワード一致をカウント
+        let matchedCount = 0;
+        let matchedWords = [];
+        primaryKeywords.forEach(keyword => {
+          if (answer.includes(keyword)) {
+            matchedCount++;
+            matchedWords.push(keyword);
+          }
+        });
+        
+        // 一致率に基づく加点（最大3点）
+        const totalKeywords = Math.max(primaryKeywords.length, 1);
+        const matchRatio = matchedCount / Math.min(totalKeywords, 8); // 8個中何個一致したか
+        
+        if (matchRatio >= 0.6) {
+          score += 3;
+          feedbackParts.push('重要なポイントをよく押さえています');
+        } else if (matchRatio >= 0.4) {
+          score += 2;
+          feedbackParts.push('主要なポイントを押さえています');
+        } else if (matchRatio >= 0.2) {
+          score += 1;
+          feedbackParts.push('一部のポイントは含まれています');
+        } else if (matchedCount > 0) {
+          score += 0.5;
+          feedbackParts.push('もう少しポイントを押さえましょう');
+        } else {
+          score -= 1;
+          feedbackParts.push('模範解答のキーポイントを確認しましょう');
+        }
+        
+        // === 3. 加点要素のチェック ===
+        let bonusFeedback = [];
+        
+        // 3管理のフレームワーク使用
+        const has3kanri = ['作業環境管理', '作業管理', '健康管理'].filter(k => answer.includes(k)).length;
+        if (has3kanri >= 2 || answer.includes('3管理')) {
+          score += 1;
+          bonusFeedback.push('3管理の視点');
+        }
+        
+        // 具体的な数値の提示
+        const hasNumbers = /\d+(\.\d+)?\s*(度|℃|%|m\/s²?|dB|ppm|mg|時間|分|年|月|日|名|人|回|歳)/.test(answer);
+        if (hasNumbers) {
+          score += 0.5;
+          bonusFeedback.push('具体的な数値');
+        }
+        
+        // 構造的な回答（列挙している）
+        const listCount = (answer.match(/[1-9１-９一二三四五]つ[目は、]|第[1-9一二三四五]に|まず[、は]|次に|また[、は]|さらに|最後に/g) || []).length;
+        if (listCount >= 2) {
+          score += 0.5;
+          bonusFeedback.push('構造的な説明');
+        }
+        
+        if (bonusFeedback.length > 0) {
+          feedbackParts.push('良い点: ' + bonusFeedback.join('、'));
+        }
+        
+        // === 4. 減点要素のチェック（軽めに） ===
+        let penaltyFeedback = [];
+        
+        // 「思います」の多用（3回以上で減点）
+        const thinkCount = (answer.match(/思います/g) || []).length;
+        if (thinkCount >= 3) {
+          score -= 0.5;
+          penaltyFeedback.push('「思います」を減らし断定的に');
+        }
+        
+        // 「一般的には」だけで終わる
+        if (/一般的には[^。]*。?$/.test(answer) && answer.length < 50) {
+          score -= 0.5;
+          penaltyFeedback.push('具体的な説明を加えましょう');
+        }
+        
+        // 「わかりません」だけ
+        if (/^(わかりません|分かりません|知りません)[。、]?$/.test(answer.trim())) {
+          score = 1;
+          penaltyFeedback.push('関連する知識で補いましょう');
+        }
+        
+        if (penaltyFeedback.length > 0) {
+          feedbackParts.push('改善点: ' + penaltyFeedback.join('、'));
+        }
+        
+        // === 最終スコアの調整 ===
+        score = Math.max(1, Math.min(10, Math.round(score)));
+        
+        // === フィードバック生成 ===
+        let finalFeedback = '';
+        if (score >= 9) {
+          finalFeedback = '素晴らしい回答です！ ';
+        } else if (score >= 7) {
+          finalFeedback = '良い回答です。 ';
+        } else if (score >= 6) {
+          finalFeedback = '合格水準です。 ';
+        } else if (score >= 4) {
+          finalFeedback = '惜しい！もう少しです。 ';
+        } else {
+          finalFeedback = '模範解答を確認しましょう。 ';
+        }
+        finalFeedback += feedbackParts.join(' ');
+        
+        return { score, feedback: finalFeedback };
+      };
+
+      const addToReview = (item) => {
+        const newItem = { ...item, id: Date.now(), addedAt: new Date().toISOString() };
+        setReviewItems(prev => [...prev, newItem]);
+      };
+
+      const removeFromReview = (id) => {
+        setReviewItems(prev => prev.filter(item => item.id !== id));
+      };
+
+      const selectNextTheme = () => {
+        const availableThemes = activeThemes.filter((_, idx) => !usedThemes.includes(idx));
+        if (availableThemes.length === 0) return null;
+        const randomIndex = Math.floor(Math.random() * availableThemes.length);
+        const theme = availableThemes[randomIndex];
+        const originalIndex = activeThemes.findIndex(t => t.id === theme.id);
+        setUsedThemes(prev => [...prev, originalIndex]);
+        setCurrentThemeIndex(originalIndex);
+        setCurrentQuestionLevel(0);
+        return theme;
+      };
+
+      const getCurrentQuestion = () => {
+        const theme = activeThemes[currentThemeIndex];
+        if (!theme) return null;
+        return theme.questions[currentQuestionLevel];
+      };
+
+      // 試験開始（モード選択）
+      const startExam = (mode) => {
+        let themes = [];
+        let followUps = {};
+        
+        if (mode === 'main') {
+          // 本編：ファイルから読み込み + 手動追加を統合
+          themes = [...mainThemes, ...addedMainThemes];
+          followUps = { ...additionalFollowUps, ...addedAdditionalQs };
+        } else if (mode === 'additional') {
+          // 追加問題編：追加質問を問題として出題（ファイル + 手動追加）
+          const allFollowUps = { ...additionalFollowUps, ...addedAdditionalQs };
+          themes = Object.entries(allFollowUps).map(([q, a], idx) => ({
+            id: idx + 1,
+            name: `追加質問 ${idx + 1}`,
+            questions: [{
+              level: '追加',
+              question: q,
+              modelAnswer: a,
+              keyPoints: a.split(/[、。]/).filter(s => s.length > 5).slice(0, 3),
+              followUpQuestions: []
+            }]
+          }));
+          followUps = {};
+        }
+        
+        if (themes.length === 0) {
+          alert('問題がありません');
+          return;
+        }
+        
+        setActiveThemes(themes);
+        setActiveFollowUps(followUps);
+        setExamMode(mode);
+        setAppMode('exam');
+        setGameState('start');
+        setMessages([]);
+        setCurrentThemeIndex(0);
+        setCurrentQuestionLevel(0);
+        setCompletedThemes([]);
+        setScores([]);
+        setTotalScore(0);
+        setFollowUpQuestion(null);
+        setUsedThemes([]);
+        setTakeHomeCount(0);
+        setTakeHomeThemes([]);
+        
+        const maxThemes = Math.min(5, themes.length);
+        const modeLabel = mode === 'main' ? '本編' : '追加問題編';
+        
+        setTimeout(() => {
+          setMessages([{
+            role: 'examiner',
+            content: `**${modeLabel}モード**へようこそ。
+
+📋 **試験ルール**
+• ${maxThemes}つのテーマについて出題
+• 各問題は10点満点で採点
+• 6点以上で次のレベルへ
+• 5点以下で補足質問（本編のみ）
+
+📦 **持ち帰り**: 2回まで
+📚 **復習フォルダ**: 5点以下は自動保存
+✅ **合格基準**: 60%以上
+
+「開始」と入力してください。`
+          }]);
+        }, 100);
+      };
+
+      // 復習モード
+      const startReviewExam = () => {
+        if (reviewItems.length === 0) return;
+        setExamMode('review');
+        setAppMode('reviewExam');
+        setCurrentReviewIndex(0);
+        setMessages([]);
+        setGameState('question');
+        
+        const item = reviewItems[0];
+        setTimeout(() => {
+          setMessages([{
+            role: 'examiner',
+            content: `📚 **復習モード** (${reviewItems.length}問)
+
+**【${item.themeName} - ${item.level}】**
+${item.question}
+
+💡 前回：${item.score}点`
+          }]);
+        }, 100);
+      };
+
+      const handleTakeHome = () => {
+        if (takeHomeCount >= MAX_TAKE_HOME) {
+          setGameState('result');
+          addMessage('user', '持ち帰らせていただきます。');
+          setTimeout(() => {
+            const question = getCurrentQuestion();
+            addMessage('examiner', `📦 **持ち帰り（3回目）- 不合格**
+
+📖 模範解答：${question?.modelAnswer || ''}
+
+「メニュー」でメインメニューへ`);
+          }, 500);
+          return;
+        }
+
+        const question = getCurrentQuestion();
+        setTakeHomeCount(prev => prev + 1);
+        setTakeHomeThemes(prev => [...prev, currentThemeIndex]);
+        addMessage('user', '持ち帰らせていただきます。');
+        
+        setTimeout(() => {
+          addMessage('examiner', `📦 **持ち帰り（${takeHomeCount + 1}/${MAX_TAKE_HOME}回）**
+
+📖 模範解答：${question?.modelAnswer}`);
+          setTimeout(() => handleThemeComplete(true), 1500);
+        }, 500);
+      };
+
+      const handleThemeComplete = (isTakeHome = false) => {
+        if (!isTakeHome) setCompletedThemes(prev => [...prev, currentThemeIndex]);
+        const maxThemes = Math.min(5, activeThemes.length);
+        
+        if (usedThemes.length >= maxThemes) {
+          setGameState('result');
+          const validScores = scores.filter(s => {
+            const themeIdx = activeThemes.findIndex(t => t.name === s.theme);
+            return !takeHomeThemes.includes(themeIdx);
+          });
+          const answeredThemeCount = maxThemes - takeHomeThemes.length - (isTakeHome ? 1 : 0);
+          const maxPossibleScore = answeredThemeCount * (examMode === 'additional' ? 10 : 30);
+          const actualScore = validScores.reduce((acc, s) => acc + s.score, 0);
+          const percentage = maxPossibleScore > 0 ? Math.round((actualScore / maxPossibleScore) * 100) : 0;
+          const passed = percentage >= 60;
+          
+          addMessage('examiner', `🎯 **試験終了**
+
+📊 **結果**
+回答：${answeredThemeCount}テーマ / 持ち帰り：${takeHomeThemes.length + (isTakeHome ? 1 : 0)}
+得点：${actualScore}/${maxPossibleScore}点（${percentage}%）
+
+**判定：${passed ? '🎉 合格' : '📚 不合格'}**
+
+「メニュー」でメインメニューへ`);
+        } else {
+          setGameState('question');
+          const theme = selectNextTheme();
+          if (theme) {
+            const q = theme.questions[0];
+            addMessage('examiner', `📚 **テーマ ${usedThemes.length}/${maxThemes}：${theme.name}**
+
+【${q.level}問題】${q.question}`);
+          }
+        }
+      };
+
+      const handleSend = async () => {
+        if (!inputValue.trim() || isLoading) return;
+        const userInput = inputValue.trim();
+        setInputValue('');
+        addMessage('user', userInput);
+        setIsLoading(true);
+
+        try {
+          if (userInput.includes('メニュー')) {
+            setAppMode('menu');
+            setIsLoading(false);
+            return;
+          }
+
+          // 復習モード
+          if (appMode === 'reviewExam') {
+            if (gameState === 'confirmDelete') {
+              if (userInput === '削除') {
+                removeFromReview(reviewItems[currentReviewIndex].id);
+                addMessage('examiner', '✅ 削除しました。');
+              }
+              const newItems = userInput === '削除' ? reviewItems.filter((_, i) => i !== currentReviewIndex) : reviewItems;
+              if (newItems.length === 0 || currentReviewIndex >= newItems.length) {
+                addMessage('examiner', '📚 復習完了！「メニュー」でメインメニューへ');
+                setGameState('result');
+              } else {
+                setGameState('question');
+                const next = newItems[currentReviewIndex];
+                addMessage('examiner', `**【${next.themeName} - ${next.level}】** (${currentReviewIndex + 1}/${newItems.length})
+${next.question}
+💡 前回：${next.score}点`);
+              }
+              setIsLoading(false);
+              return;
+            }
+
+            const item = reviewItems[currentReviewIndex];
+            const result = await gradeAnswer(item.question, item.modelAnswer, item.keyPoints || [], userInput);
+            const improved = result.score > item.score;
+            
+            addMessage('examiner', `**${result.score}点** ${improved ? '📈' : ''}
+${result.feedback}
+
+📖 模範解答：${item.modelAnswer}`);
+
+            setTimeout(() => {
+              if (result.score >= 6) {
+                addMessage('examiner', '✨ 合格！「削除」で復習フォルダから削除、他の入力で次へ');
+                setGameState('confirmDelete');
+              } else {
+                if (currentReviewIndex < reviewItems.length - 1) {
+                  setCurrentReviewIndex(prev => prev + 1);
+                  const next = reviewItems[currentReviewIndex + 1];
+                  addMessage('examiner', `**【${next.themeName} - ${next.level}】** (${currentReviewIndex + 2}/${reviewItems.length})
+${next.question}
+💡 前回：${next.score}点`);
+                } else {
+                  addMessage('examiner', '📚 復習完了！「メニュー」でメインメニューへ');
+                  setGameState('result');
+                }
+              }
+            }, 1500);
+            setIsLoading(false);
+            return;
+          }
+
+          // 通常試験
+          if (gameState === 'start') {
+            if (userInput.includes('開始')) {
+              const theme = selectNextTheme();
+              if (theme) {
+                setGameState('question');
+                const q = theme.questions[0];
+                addMessage('examiner', `📚 **テーマ ${usedThemes.length}/${Math.min(5, activeThemes.length)}：${theme.name}**
+
+【${q.level}問題】${q.question}`);
+              }
+            }
+          } else if (gameState === 'question') {
+            const question = getCurrentQuestion();
+            if (!question) return;
+            
+            const result = await gradeAnswer(question.question, question.modelAnswer, question.keyPoints, userInput);
+            const newScore = { theme: activeThemes[currentThemeIndex].name, level: question.level, score: result.score, addedToReview: false };
+            
+            if (result.score <= 5) {
+              addToReview({
+                themeName: activeThemes[currentThemeIndex].name,
+                level: question.level,
+                question: question.question,
+                modelAnswer: question.modelAnswer,
+                keyPoints: question.keyPoints,
+                userAnswer: userInput,
+                score: result.score,
+                feedback: result.feedback,
+                source: examMode
+              });
+              newScore.addedToReview = true;
+            }
+            
+            setScores(prev => [...prev, newScore]);
+            setTotalScore(prev => prev + result.score);
+            
+            const emoji = result.score >= 8 ? '🌟' : result.score >= 6 ? '✅' : '⚠️';
+            addMessage('examiner', `${emoji} **${result.score}点**
+${result.feedback}${result.score <= 5 ? '\n📚 復習フォルダに追加' : ''}
+
+📖 模範解答：${question.modelAnswer}`);
+
+            setTimeout(() => {
+              if (result.score >= 6) {
+                if (currentQuestionLevel < 2 && activeThemes[currentThemeIndex].questions.length > currentQuestionLevel + 1) {
+                  setCurrentQuestionLevel(prev => prev + 1);
+                  const nextQ = activeThemes[currentThemeIndex].questions[currentQuestionLevel + 1];
+                  addMessage('examiner', `✨ 次へ！【${nextQ.level}問題】${nextQ.question}`);
+                } else {
+                  handleThemeComplete();
+                }
+              } else {
+                // 本編のみ補足質問
+                const followUp = examMode === 'main' ? question.followUpQuestions?.[0] : null;
+                if (followUp) {
+                  setFollowUpQuestion(followUp);
+                  setGameState('followUp');
+                  addMessage('examiner', `💡 補足質問：**${followUp}**`);
+                } else {
+                  handleThemeComplete();
+                }
+              }
+            }, 1500);
+          } else if (gameState === 'followUp') {
+            const expectedAnswer = activeFollowUps[followUpQuestion] || '';
+            const result = await gradeAnswer(followUpQuestion, expectedAnswer || '適切な説明', [], userInput);
+            
+            if (result.score <= 5) {
+              addToReview({
+                themeName: activeThemes[currentThemeIndex].name,
+                level: '追加質問',
+                question: followUpQuestion,
+                modelAnswer: expectedAnswer || '（未登録）',
+                keyPoints: [],
+                userAnswer: userInput,
+                score: result.score,
+                feedback: result.feedback,
+                isFollowUp: true,
+                source: examMode
+              });
+            }
+            
+            addMessage('examiner', `**${result.score}点**
+${result.feedback}
+📖 模範解答：${expectedAnswer || '（未登録）'}`);
+
+            setFollowUpQuestion(null);
+            setTimeout(() => {
+              if (result.score >= 6) {
+                setGameState('question');
+                if (currentQuestionLevel < 2 && activeThemes[currentThemeIndex].questions.length > currentQuestionLevel + 1) {
+                  setCurrentQuestionLevel(prev => prev + 1);
+                  const nextQ = activeThemes[currentThemeIndex].questions[currentQuestionLevel + 1];
+                  addMessage('examiner', `✨ 次へ！【${nextQ.level}問題】${nextQ.question}`);
+                } else {
+                  handleThemeComplete();
+                }
+              } else {
+                handleThemeComplete();
+              }
+            }, 1500);
+          }
+        } catch (error) {
+          console.error('Error:', error);
+          addMessage('examiner', 'エラーが発生しました。');
+        } finally {
+          setIsLoading(false);
+        }
+      };
+
+      // 本編にマークダウンから追加
+      const handleAddMainFromMarkdown = () => {
+        if (!mainMarkdownInput.trim()) {
+          alert('マークダウンを入力してください');
+          return;
+        }
+        const parsed = parseQuestionsMarkdown(mainMarkdownInput);
+        if (parsed.length === 0) {
+          alert('問題を認識できませんでした。形式を確認してください。');
+          return;
+        }
+        // IDを振り直す
+        const allThemes = [...mainThemes, ...addedMainThemes];
+        const maxId = Math.max(...allThemes.map(t => t.id), 0);
+        const newThemes = parsed.map((t, idx) => ({ ...t, id: maxId + idx + 1 }));
+        
+        setAddedMainThemes(prev => [...prev, ...newThemes]);
+        setMainMarkdownInput('');
+        alert(`${newThemes.length}テーマ（${newThemes.reduce((a, t) => a + t.questions.length, 0)}問）を本編に追加しました`);
+      };
+
+      // 追加問題編にマークダウンから追加
+      const handleAddAdditionalFromMarkdown = () => {
+        if (!additionalMarkdownInput.trim()) {
+          alert('マークダウンを入力してください');
+          return;
+        }
+        const parsed = parseFollowUpMarkdown(additionalMarkdownInput);
+        if (Object.keys(parsed).length === 0) {
+          alert('問題を認識できませんでした。形式を確認してください。');
+          return;
+        }
+        setAddedAdditionalQs(prev => ({ ...prev, ...parsed }));
+        setAdditionalMarkdownInput('');
+        alert(`${Object.keys(parsed).length}問を追加問題編に追加しました`);
+      };
+
+      // 本編の追加問題を削除
+      const handleDeleteAddedMainTheme = (id) => {
+        if (!confirm('削除しますか？')) return;
+        setAddedMainThemes(prev => prev.filter(t => t.id !== id));
+      };
+
+      // 追加問題編の追加問題を削除
+      const handleDeleteAddedAdditionalQ = (question) => {
+        if (!confirm('削除しますか？')) return;
+        setAddedAdditionalQs(prev => {
+          const updated = { ...prev };
+          delete updated[question];
+          return updated;
+        });
+      };
+      
+      // 追加した問題を全削除
+      const handleClearAddedMain = () => {
+        if (!confirm('追加した本編問題をすべて削除しますか？')) return;
+        setAddedMainThemes([]);
+      };
+      
+      const handleClearAddedAdditional = () => {
+        if (!confirm('追加した追加問題をすべて削除しますか？')) return;
+        setAddedAdditionalQs({});
+      };
+
+      // ローディング
+      if (appMode === 'loading') {
+        return (
+          <div className="min-h-screen bg-blue-50 flex items-center justify-center">
+            <div className="text-center">
+              <div className="text-4xl mb-4">📚</div>
+              <p className="text-blue-700">データを読み込み中...</p>
+            </div>
+          </div>
+        );
+      }
+
+      // メニュー
+      if (appMode === 'menu') {
+        const allMainThemes = [...mainThemes, ...addedMainThemes];
+        const mainCount = allMainThemes.reduce((a, t) => a + t.questions.length, 0);
+        const allAdditionalQs = { ...additionalFollowUps, ...addedAdditionalQs };
+        const additionalCount = Object.keys(allAdditionalQs).length;
+        
+        return (
+          <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
+            <div className="max-w-2xl mx-auto pt-6">
+              <div className="text-center mb-6">
+                <h1 className="text-2xl font-bold text-blue-900 mb-1">労働衛生コンサルタント</h1>
+                <p className="text-lg text-blue-700">口述試験対策システム</p>
+              </div>
+              
+              <div className="space-y-3">
+                {/* 本編 */}
+                <button 
+                  onClick={() => startExam('main')} 
+                  disabled={allMainThemes.length === 0}
+                  className="w-full bg-gray-500 hover:bg-gray-600 disabled:bg-gray-300 text-white rounded-2xl p-5 text-left shadow-lg relative"
+                >
+                  <div className="flex items-center gap-4">
+                    <span className="text-3xl">📄</span>
+                    <div>
+                      <h2 className="text-xl font-bold">本編（詳細解説付き）</h2>
+                      <p className="text-gray-200 text-sm">基本→詳細→応用の3段階構成</p>
+                    </div>
+                  </div>
+                  <span className="absolute top-4 right-4 bg-blue-500 text-white text-sm font-bold px-3 py-1 rounded-full">
+                    {mainCount}
+                  </span>
+                </button>
+                
+                {/* 追加問題編 */}
+                <button 
+                  onClick={() => startExam('additional')} 
+                  disabled={additionalCount === 0}
+                  className="w-full bg-gray-500 hover:bg-gray-600 disabled:bg-gray-300 text-white rounded-2xl p-5 text-left shadow-lg relative"
+                >
+                  <div className="flex items-center gap-4">
+                    <span className="text-3xl">📝</span>
+                    <div>
+                      <h2 className="text-xl font-bold">追加問題編</h2>
+                      <p className="text-gray-200 text-sm">補足的な問題で知識を補強</p>
+                    </div>
+                  </div>
+                  <span className="absolute top-4 right-4 bg-blue-500 text-white text-sm font-bold px-3 py-1 rounded-full">
+                    {additionalCount}
+                  </span>
+                </button>
+                
+                {/* 復習フォルダ */}
+                <button 
+                  onClick={() => setAppMode('review')} 
+                  className="w-full bg-amber-500 hover:bg-amber-600 text-white rounded-2xl p-5 text-left shadow-lg relative"
+                >
+                  <div className="flex items-center gap-4">
+                    <span className="text-3xl">📚</span>
+                    <div>
+                      <h2 className="text-xl font-bold">復習フォルダ</h2>
+                      <p className="text-amber-100 text-sm">5点以下の問題を復習</p>
+                    </div>
+                  </div>
+                  {reviewItems.length > 0 && (
+                    <span className="absolute top-4 right-4 bg-red-500 text-white text-sm font-bold px-3 py-1 rounded-full">
+                      {reviewItems.length}
+                    </span>
+                  )}
+                </button>
+              </div>
+              
+
+              
+              {/* 統計 */}
+              <div className="mt-4 bg-white rounded-xl p-4 shadow">
+                <h3 className="font-bold text-gray-800 mb-2 text-sm">📊 登録状況</h3>
+                <div className="grid grid-cols-2 gap-2 text-center text-sm">
+                  <div>
+                    <div className="text-xl font-bold text-gray-600">{allMainThemes.length}</div>
+                    <div className="text-gray-500 text-xs">本編テーマ</div>
+                  </div>
+                  <div>
+                    <div className="text-xl font-bold text-gray-600">{additionalCount}</div>
+                    <div className="text-gray-500 text-xs">追加問題</div>
+                  </div>
+                </div>
+              </div>
+              
+              {/* クレジット */}
+              <div className="mt-4 text-center">
+                <button 
+                  onClick={() => setAppMode('credits')} 
+                  className="text-gray-400 hover:text-gray-600 text-xs"
+                >
+                  © 著作権・参考資料
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      }
+
+      // 復習フォルダ
+      if (appMode === 'review') {
+        return (
+          <div className="min-h-screen bg-slate-50">
+            <div className="bg-amber-500 text-white p-4">
+              <div className="max-w-4xl mx-auto flex justify-between items-center">
+                <h1 className="text-xl font-bold">📚 復習フォルダ</h1>
+                <button onClick={() => setAppMode('menu')} className="bg-amber-600 px-4 py-2 rounded-lg text-sm">
+                  戻る
+                </button>
+              </div>
+            </div>
+            <div className="max-w-4xl mx-auto p-4">
+              {reviewItems.length === 0 ? (
+                <div className="bg-white rounded-xl p-8 shadow text-center">
+                  <span className="text-5xl mb-4 block">🎉</span>
+                  <p className="text-gray-600">復習する問題はありません</p>
+                </div>
+              ) : (
+                <>
+                  <div className="flex justify-between mb-4">
+                    <p className="text-gray-600">{reviewItems.length}問</p>
+                    <button onClick={startReviewExam} className="bg-amber-500 text-white px-4 py-2 rounded-lg">
+                      🎯 復習開始
+                    </button>
+                  </div>
+                  <div className="space-y-3">
+                    {reviewItems.map(item => (
+                      <div key={item.id} className="bg-white rounded-xl p-4 shadow">
+                        <div className="flex justify-between">
+                          <div>
+                            <span className={`text-xs px-2 py-1 rounded mr-2 ${
+                              item.source === 'main' ? 'bg-gray-100 text-gray-700' :
+                              item.source === 'additional' ? 'bg-blue-100 text-blue-700' :
+                              'bg-purple-100 text-purple-700'
+                            }`}>
+                              {item.source === 'main' ? '本編' : item.source === 'additional' ? '追加' : 'カスタム'}
+                            </span>
+                            <span className="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded mr-2">{item.level}</span>
+                            <span className="font-medium">{item.themeName}</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-red-500 font-bold">{item.score}点</span>
+                            <button onClick={() => removeFromReview(item.id)} className="text-gray-400 hover:text-red-500">✕</button>
+                          </div>
+                        </div>
+                        <p className="text-gray-700 text-sm mt-2">{item.question.substring(0, 80)}...</p>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        );
+      }
+
+      // クレジット画面
+      if (appMode === 'credits') {
+        return (
+          <div className="min-h-screen bg-slate-50">
+            <div className="bg-gray-700 text-white p-4">
+              <div className="max-w-4xl mx-auto flex justify-between items-center">
+                <h1 className="text-xl font-bold">📜 著作権・参考資料</h1>
+                <button onClick={() => setAppMode('menu')} className="bg-gray-600 px-4 py-2 rounded-lg text-sm">
+                  戻る
+                </button>
+              </div>
+            </div>
+            <div className="max-w-4xl mx-auto p-4">
+              {/* 著作権 */}
+              <div className="bg-white rounded-xl p-6 shadow mb-4">
+                <h2 className="text-xl font-bold text-gray-800 mb-4">📝 著作権</h2>
+                <div className="space-y-3">
+                  <div>
+                    <p className="text-gray-600 text-sm">制作・著作</p>
+                    <p className="text-lg font-bold text-gray-800">産業保健とこころのオフィス</p>
+                    <p className="text-gray-700">代表社員　瀬下 直史</p>
+                  </div>
+                  <div className="border-t pt-3">
+                    <p className="text-gray-500 text-sm">
+                      本アプリケーションおよび収録された問題・解答の著作権は上記に帰属します。<br/>
+                      無断での複製・転載・再配布を禁止します。
+                    </p>
+                  </div>
+                </div>
+              </div>
+              
+              {/* 参考資料 */}
+              <div className="bg-white rounded-xl p-6 shadow mb-4">
+                <h2 className="text-xl font-bold text-gray-800 mb-4">📚 参考資料</h2>
+                <ul className="space-y-2 text-gray-700 text-sm">
+                  <li className="flex items-start gap-2">
+                    <span className="text-blue-500">•</span>
+                    <span>労働安全衛生法・労働安全衛生規則</span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <span className="text-blue-500">•</span>
+                    <span>有機溶剤中毒予防規則</span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <span className="text-blue-500">•</span>
+                    <span>特定化学物質障害予防規則</span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <span className="text-blue-500">•</span>
+                    <span>酸素欠乏症等防止規則</span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <span className="text-blue-500">•</span>
+                    <span>じん肺法</span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <span className="text-blue-500">•</span>
+                    <span>厚生労働省 各種ガイドライン・通達</span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <span className="text-blue-500">•</span>
+                    <span>日本産業衛生学会 許容濃度等の勧告</span>
+                  </li>
+                </ul>
+              </div>
+              
+              {/* 免責事項 */}
+              <div className="bg-white rounded-xl p-6 shadow">
+                <h2 className="text-xl font-bold text-gray-800 mb-4">⚠️ 免責事項</h2>
+                <p className="text-gray-600 text-sm leading-relaxed">
+                  本アプリケーションは学習支援を目的としており、実際の試験結果を保証するものではありません。
+                  問題・解答の内容については正確性を期しておりますが、法令・制度の改正等により
+                  内容が変更される場合があります。最新の情報は公式資料でご確認ください。
+                </p>
+              </div>
+              
+              {/* フッター */}
+              <div className="mt-6 text-center text-gray-400 text-xs">
+                <p>© {new Date().getFullYear()} 産業保健とこころのオフィス All Rights Reserved.</p>
+              </div>
+            </div>
+          </div>
+        );
+      }
+
+      // 管理画面
+      if (appMode === 'admin') {
+        return (
+          <div className="min-h-screen bg-slate-50">
+            <div className="bg-gray-700 text-white p-4">
+              <div className="max-w-4xl mx-auto flex justify-between items-center">
+                <h1 className="text-xl font-bold">⚙️ 問題管理</h1>
+                <button onClick={() => setAppMode('menu')} className="bg-gray-600 px-4 py-2 rounded-lg text-sm">
+                  戻る
+                </button>
+              </div>
+            </div>
+            <div className="max-w-4xl mx-auto p-4">
+              <div className="flex gap-2 mb-4 flex-wrap">
+                <button
+                  onClick={() => setAdminTab('addMain')}
+                  className={`px-4 py-2 rounded-lg ${adminTab === 'addMain' ? 'bg-blue-600 text-white' : 'bg-white text-gray-700'}`}
+                >
+                  📄 本編問題を追加
+                </button>
+                <button
+                  onClick={() => setAdminTab('addAdditional')}
+                  className={`px-4 py-2 rounded-lg ${adminTab === 'addAdditional' ? 'bg-green-600 text-white' : 'bg-white text-gray-700'}`}
+                >
+                  📝 追加問題を追加
+                </button>
+                <button
+                  onClick={() => setAdminTab('list')}
+                  className={`px-4 py-2 rounded-lg ${adminTab === 'list' ? 'bg-gray-600 text-white' : 'bg-white text-gray-700'}`}
+                >
+                  📋 一覧
+                </button>
+              </div>
+
+              {/* 本編問題を追加 */}
+              {adminTab === 'addMain' && (
+                <div className="bg-white rounded-xl p-6 shadow">
+                  <h2 className="text-xl font-bold mb-2 text-blue-700">📄 本編問題を追加</h2>
+                  <p className="text-gray-500 text-sm mb-4">予想問題集のマークダウンを貼り付けてください</p>
+                  
+                  <textarea
+                    value={mainMarkdownInput}
+                    onChange={(e) => setMainMarkdownInput(e.target.value)}
+                    placeholder="## テーマ名&#10;&#10;**Q1（基本問題）：**&#10;問題文...&#10;&#10;**【模範解答】**&#10;解答文..."
+                    className="w-full border-2 border-blue-200 rounded-xl px-4 py-3 h-64 text-sm focus:border-blue-500 focus:outline-none font-mono"
+                  />
+                  
+                  <button 
+                    onClick={handleAddMainFromMarkdown} 
+                    className="w-full bg-blue-600 hover:bg-blue-700 text-white py-3 rounded-xl font-bold mt-4"
+                  >
+                    📄 本編に追加
+                  </button>
+                  
+                  <div className="mt-4 bg-blue-50 rounded-lg p-4 text-sm">
+                    <h4 className="font-bold text-blue-800 mb-2">📝 形式</h4>
+                    <pre className="text-blue-700 text-xs whitespace-pre-wrap">{`## テーマ名
+
+**Q1（基本問題）：**
+問題文
+
+**【模範解答】**
+解答文
+
+**【この問題で試験官が見ているポイント】**
+- ポイント1
+- ポイント2
+
+**【想定される追加質問】**
+- 追加質問1`}</pre>
+                  </div>
+                </div>
+              )}
+
+              {/* 追加問題を追加 */}
+              {adminTab === 'addAdditional' && (
+                <div className="bg-white rounded-xl p-6 shadow">
+                  <h2 className="text-xl font-bold mb-2 text-green-700">📝 追加問題を追加</h2>
+                  <p className="text-gray-500 text-sm mb-4">追加質問回答集のマークダウンを貼り付けてください</p>
+                  
+                  <textarea
+                    value={additionalMarkdownInput}
+                    onChange={(e) => setAdditionalMarkdownInput(e.target.value)}
+                    placeholder="### Q：質問文&#10;&#10;**A：** 回答文&#10;&#10;---&#10;&#10;### Q：次の質問&#10;&#10;**A：** 次の回答"
+                    className="w-full border-2 border-green-200 rounded-xl px-4 py-3 h-64 text-sm focus:border-green-500 focus:outline-none font-mono"
+                  />
+                  
+                  <button 
+                    onClick={handleAddAdditionalFromMarkdown} 
+                    className="w-full bg-green-600 hover:bg-green-700 text-white py-3 rounded-xl font-bold mt-4"
+                  >
+                    📝 追加問題編に追加
+                  </button>
+                  
+                  <div className="mt-4 bg-green-50 rounded-lg p-4 text-sm">
+                    <h4 className="font-bold text-green-800 mb-2">📝 形式</h4>
+                    <pre className="text-green-700 text-xs whitespace-pre-wrap">{`### Q：質問文
+
+**A：** 回答文
+
+---
+
+### Q：次の質問
+
+**A：** 次の回答`}</pre>
+                  </div>
+                </div>
+              )}
+
+              {/* 一覧 */}
+              {adminTab === 'list' && (
+                <div className="space-y-6">
+                  {/* 本編 */}
+                  <div>
+                    <div className="flex justify-between items-center mb-3">
+                      <h3 className="font-bold text-lg text-blue-700">📄 本編問題</h3>
+                      {addedMainThemes.length > 0 && (
+                        <button onClick={handleClearAddedMain} className="text-red-500 text-sm">
+                          追加分をすべて削除
+                        </button>
+                      )}
+                    </div>
+                    
+                    {mainThemes.length > 0 && (
+                      <div className="bg-gray-50 rounded-xl p-4 mb-3">
+                        <p className="text-gray-600 text-sm mb-2">📁 ファイルから読み込み（{mainThemes.length}テーマ）</p>
+                        <div className="flex flex-wrap gap-2">
+                          {mainThemes.map(t => (
+                            <span key={t.id} className="bg-gray-200 text-gray-700 px-2 py-1 rounded text-xs">
+                              {t.name}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    
+                    {addedMainThemes.length > 0 && (
+                      <div className="bg-blue-50 rounded-xl p-4">
+                        <p className="text-blue-600 text-sm mb-2">✏️ 手動で追加（{addedMainThemes.length}テーマ）</p>
+                        <div className="space-y-2">
+                          {addedMainThemes.map(t => (
+                            <div key={t.id} className="flex justify-between items-center bg-white rounded-lg p-2">
+                              <span className="text-gray-800 text-sm">{t.name}（{t.questions.length}問）</span>
+                              <button onClick={() => handleDeleteAddedMainTheme(t.id)} className="text-red-500 text-xs">削除</button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    
+                    {mainThemes.length === 0 && addedMainThemes.length === 0 && (
+                      <p className="text-gray-400 text-sm">本編問題はありません</p>
+                    )}
+                  </div>
+                  
+                  {/* 追加問題編 */}
+                  <div>
+                    <div className="flex justify-between items-center mb-3">
+                      <h3 className="font-bold text-lg text-green-700">📝 追加問題</h3>
+                      {Object.keys(addedAdditionalQs).length > 0 && (
+                        <button onClick={handleClearAddedAdditional} className="text-red-500 text-sm">
+                          追加分をすべて削除
+                        </button>
+                      )}
+                    </div>
+                    
+                    {Object.keys(additionalFollowUps).length > 0 && (
+                      <div className="bg-gray-50 rounded-xl p-4 mb-3">
+                        <p className="text-gray-600 text-sm">📁 ファイルから読み込み（{Object.keys(additionalFollowUps).length}問）</p>
+                      </div>
+                    )}
+                    
+                    {Object.keys(addedAdditionalQs).length > 0 && (
+                      <div className="bg-green-50 rounded-xl p-4">
+                        <p className="text-green-600 text-sm mb-2">✏️ 手動で追加（{Object.keys(addedAdditionalQs).length}問）</p>
+                        <div className="space-y-2 max-h-64 overflow-y-auto">
+                          {Object.entries(addedAdditionalQs).map(([q, a], idx) => (
+                            <div key={idx} className="flex justify-between items-start bg-white rounded-lg p-2">
+                              <div className="flex-1">
+                                <p className="text-gray-800 text-sm font-medium">Q: {q}</p>
+                                <p className="text-gray-500 text-xs mt-1">A: {a.substring(0, 50)}...</p>
+                              </div>
+                              <button onClick={() => handleDeleteAddedAdditionalQ(q)} className="text-red-500 text-xs ml-2">削除</button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    
+                    {Object.keys(additionalFollowUps).length === 0 && Object.keys(addedAdditionalQs).length === 0 && (
+                      <p className="text-gray-400 text-sm">追加問題はありません</p>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      }
+
+      // 試験画面
+      const maxThemes = Math.min(5, activeThemes.length);
+      const canTakeHome = appMode === 'exam' && (gameState === 'question' || gameState === 'followUp');
+      const isReviewMode = appMode === 'reviewExam';
+      
+      // ホームに戻る確認
+      const handleGoHome = () => {
+        if (confirm('試験を中断してホームに戻りますか？\n（進捗は保存されません）')) {
+          setAppMode('menu');
+          setMessages([]);
+          setGameState('idle');
+          setCurrentTheme(null);
+          setCurrentQuestionIdx(0);
+          setUsedThemes([]);
+          setTotalScore(0);
+          setAnsweredCount(0);
+          setTakeHomeCount(0);
+        }
+      };
+      
+      return (
+        <div className="flex flex-col h-screen bg-slate-50">
+          <div className={`${isReviewMode ? 'bg-amber-500' : 'bg-gray-600'} text-white p-4`}>
+            <div className="max-w-4xl mx-auto flex justify-between items-center">
+              <div className="flex items-center gap-3">
+                <button 
+                  onClick={handleGoHome}
+                  className="bg-white/20 hover:bg-white/30 rounded-lg px-3 py-1 text-sm"
+                >
+                  ← 終了
+                </button>
+                <h1 className="font-bold">
+                  {isReviewMode ? '📚 復習モード' : 
+                   examMode === 'main' ? '📄 本編' : '📝 追加問題編'}
+                </h1>
+              </div>
+              {!isReviewMode && (
+                <div className="text-sm">
+                  テーマ {usedThemes.length}/{maxThemes} | 持ち帰り残り {MAX_TAKE_HOME - takeHomeCount}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="flex-1 overflow-y-auto p-4">
+            <div className="max-w-4xl mx-auto space-y-4">
+              {messages.map((msg, idx) => (
+                <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                  <div className={`max-w-3xl rounded-2xl px-4 py-3 ${
+                    msg.role === 'user' ? 'bg-blue-600 text-white' : 'bg-white border shadow-sm'
+                  }`}>
+                    <div className="whitespace-pre-wrap text-sm">
+                      {msg.content.split(/(\*\*[^*]+\*\*)/).map((part, i) => 
+                        part.startsWith('**') && part.endsWith('**') 
+                          ? <strong key={i}>{part.slice(2, -2)}</strong> 
+                          : part
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
+              {isLoading && (
+                <div className="flex justify-start">
+                  <div className="bg-white border rounded-2xl px-4 py-3 shadow-sm">
+                    <span className="text-gray-500 text-sm">採点中...</span>
+                  </div>
+                </div>
+              )}
+              <div ref={messagesEndRef} />
+            </div>
+          </div>
+
+          <div className="bg-white border-t p-4">
+            <div className="max-w-4xl mx-auto flex gap-2">
+              {canTakeHome && (
+                <button onClick={handleTakeHome} disabled={isLoading}
+                  className="px-4 py-3 rounded-xl font-semibold bg-amber-100 text-amber-700 border-2 border-amber-300">
+                  📦 持ち帰り
+                </button>
+              )}
+              <textarea
+                value={inputValue}
+                onChange={(e) => setInputValue(e.target.value)}
+                onKeyPress={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
+                placeholder="回答を入力..."
+                className="flex-1 border rounded-xl px-4 py-3 resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"
+                rows={2}
+                disabled={isLoading}
+              />
+              <button onClick={handleSend} disabled={isLoading || !inputValue.trim()}
+                className="bg-blue-600 text-white px-6 py-3 rounded-xl font-semibold hover:bg-blue-700 disabled:bg-gray-300">
+                送信
+              </button>
+            </div>
+            <p className="text-xs text-gray-500 mt-2 text-center">「メニュー」で戻る</p>
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
