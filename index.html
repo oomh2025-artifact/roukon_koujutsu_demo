@@ -991,16 +991,61 @@ ${result.feedback}
                 </div>
               </div>
               
-              {/* 参考資料 */}
+   {/* 参考資料 */}
               <div className="bg-white rounded-xl p-6 shadow mb-4">
                 <h2 className="text-xl font-bold text-gray-800 mb-4">📚 参考資料</h2>
-                <ul className="space-y-2 text-gray-700 text-sm">
-                  <li className="flex items-start gap-2">
-                    <span className="text-blue-500">•</span>
-                    <span>労働安全衛生法・労働安全衛生規則</span>
-                  </li>
-                  ...（省略）...
-                </ul>
+                
+                <details className="mb-3">
+                  <summary className="font-bold text-gray-700 cursor-pointer">📖 書籍</summary>
+                  <ul className="mt-2 ml-4 space-y-1 text-gray-600 text-xs">
+                    <li>• 論点思考: BCG流問題設定の技術（2010、東洋経済新報社、内田和成）</li>
+                    <li>• 問題解決ツールとしての法的思考力（2022、日本実業出版社、大城章顕）</li>
+                    <li>• よくわかる産業保健の法令と実践（2023、バイオコミュニケーションズ、石井義脩）</li>
+                    <li>• 労働衛生のしおり（2025、中労災）</li>
+                    <li>• 化学物質管理者専門的講習テキスト（2023、日本規格協会、城内博ら）</li>
+                    <li>• 化学物質の自律的な管理の基本とリスクアセスメント（2025、中労災）</li>
+                    <li>• 作業環境測定の実務の進め方（2021、日本作業環境測定協会）</li>
+                    <li>• 作業環境測定士・労働衛生コンサルタント資格取得のための労働衛生関係法令の要点の解説（2024、日本作業環境測定協会）</li>
+                    <li>• まるわかり職場巡視工場編（加部勇、2023、産業医学新興財団）</li>
+                    <li>• 丸わかり職場巡視事務所編（竹田徹、2024、産業医学新興財団）</li>
+                    <li>• 悲劇を繰り返さないための労働災害調査分析の手引き（畑英志、2023、中労災）</li>
+                  </ul>
+                </details>
+                
+                <details className="mb-3">
+                  <summary className="font-bold text-gray-700 cursor-pointer">📄 論文</summary>
+                  <ul className="mt-2 ml-4 space-y-1 text-gray-600 text-xs">
+                    <li>• 原邦夫「日本における産業衛生技術専門職のコンピテンシー領域・項目」産業衛生学雑誌63巻4号, 2021年</li>
+                    <li>• 島田行恭「プロセス産業における安全管理の体系化と具体的な進め方」労働安全衛生総合研究所特別報告、2021年</li>
+                  </ul>
+                </details>
+                
+                <details className="mb-3">
+                  <summary className="font-bold text-gray-700 cursor-pointer">🌐 Webサイト（厚生労働省）</summary>
+                  <ul className="mt-2 ml-4 space-y-1 text-gray-600 text-xs">
+                    <li>• 労働安全コンサルタント・労働衛生コンサルタント</li>
+                    <li>• 職場のあんぜんサイト</li>
+                    <li>• 化学物質規制の自律的管理に向けた制度改正</li>
+                    <li>• 高年齢労働者の安全と健康確保のためのガイドライン</li>
+                    <li>• 職場における熱中症予防対策</li>
+                    <li>• 労働者の心の健康保持増進のための指針</li>
+                    <li>• 心の健康問題により休業した労働者の職場復帰支援の手引き</li>
+                    <li>• ストレスチェック制度実施マニュアル</li>
+                    <li>• 治療と仕事の両立支援ナビ</li>
+                    <li>• その他各種ガイドライン・通達</li>
+                  </ul>
+                </details>
+                
+                <details>
+                  <summary className="font-bold text-gray-700 cursor-pointer">🏢 その他機関</summary>
+                  <ul className="mt-2 ml-4 space-y-1 text-gray-600 text-xs">
+                    <li>• 中央労働災害防止協会 各種資料</li>
+                    <li>• 日本産業衛生学会 許容濃度等の勧告</li>
+                    <li>• 労働者健康安全機構 産業保健21</li>
+                    <li>• 日本労働安全衛生コンサルタント会</li>
+                    <li>• 環境省 熱中症予防サイト</li>
+                  </ul>
+                </details>
               </div>
               {/* 免責事項 */}
               <div className="bg-white rounded-xl p-6 shadow">
